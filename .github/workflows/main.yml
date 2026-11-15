@@ -1,0 +1,69 @@
+name: Build RecRedirect.framework
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show repo contents
+        run: find . -path ./.git -prune -o -type f -print | head -60
+
+      - name: Build framework (no Xcode project needed)
+        run: |
+          SRC=$(find . -name RecRedirect.m -not -path './.git/*' | head -1)
+          if [ -z "$SRC" ]; then echo "ERROR: RecRedirect.m not found anywhere in the repo"; exit 1; fi
+          echo "Using source: $SRC"
+          CFG=$(find . -name redirects.cfg -not -path './.git/*' | head -1)
+
+          FW=out/RecRedirect.framework
+          rm -rf out && mkdir -p "$FW"
+
+          xcrun --sdk iphoneos clang -dynamiclib -arch arm64 \
+            -miphoneos-version-min=12.0 -fobjc-arc \
+            -framework Foundation -framework UIKit \
+            -install_name @rpath/RecRedirect.framework/RecRedirect \
+            -o "$FW/RecRedirect" "$SRC"
+
+          cat > "$FW/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key><string>en</string>
+            <key>CFBundleExecutable</key><string>RecRedirect</string>
+            <key>CFBundleIdentifier</key><string>com.recredirect.framework</string>
+            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+            <key>CFBundleName</key><string>RecRedirect</string>
+            <key>CFBundlePackageType</key><string>FMWK</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>CFBundleVersion</key><string>1</string>
+            <key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>
+            <key>MinimumOSVersion</key><string>12.0</string>
+          </dict>
+          </plist>
+          PLIST
+
+          if [ -n "$CFG" ]; then cp "$CFG" "$FW/redirects.cfg"; else
+            printf '[redirects]\nns.rec.net=ns.recflare.net\n' > "$FW/redirects.cfg"
+          fi
+
+          codesign --force --sign - "$FW"
+
+      - name: Verify framework
+        run: |
+          ls -la out/RecRedirect.framework
+          file out/RecRedirect.framework/RecRedirect
+          cat out/RecRedirect.framework/redirects.cfg
+          plutil -p out/RecRedirect.framework/Info.plist
+
+      - name: Zip framework (keeps the .framework folder intact)
+        run: ditto -c -k --keepParent out/RecRedirect.framework RecRedirect.framework.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RecRedirect.framework
+          path: RecRedirect.framework.zip
